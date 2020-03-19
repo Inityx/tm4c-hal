@@ -1,3 +1,4 @@
+#![allow(clippy::too_many_arguments)]
 //! Serial
 
 pub use tm4c123x::{UART0, UART1, UART2, UART3, UART4, UART5, UART6, UART7};

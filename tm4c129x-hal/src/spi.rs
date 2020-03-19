@@ -14,8 +14,10 @@ use crate::{
     time::Hertz,
 };
 
+use core::convert::identity;
 use nb;
 use tm4c129x::{SSI0, SSI1, SSI2, SSI3};
+use core::convert;
 
 /// SPI error
 #[derive(Debug)]
@@ -90,48 +92,43 @@ macro_rules! hal {
                     MISO: MisoPin<$SPIX>,
                     MOSI: MosiPin<$SPIX>,
                 {
+                    use sysctl::{Domain, RunMode, Powerstate};
+
                     // power up
                     sysctl::control_power(
-                        pc, sysctl::Domain::$powerDomain,
-                        sysctl::RunMode::Run, sysctl::PowerState::On);
+                        pc,
+                        sysctl::Domain::$powerDomain,
+                        sysctl::RunMode::Run,
+                        sysctl::PowerState::On,
+                    );
                     sysctl::reset(pc, sysctl::Domain::$powerDomain);
 
                     // write 0 (reset value) for master operation.
-                    spi.cr1.write(|w| w);
+                    spi.cr1.write(convert::identity);
 
                     // SSICC Clock setup
                     // set to reset value (0 = use system clock)
-                    spi.cc.write(|w| w);
-
-                    // Use Moto/SPI & 8bits data size
-                    let scr: u8;
-                    let mut cpsr = 2u32;
-                    let target_bitrate : u32 = clocks.sysclk.0 / freq.into().0;
+                    spi.cc.write(convert::identity);
 
                     // Find solution for
                     // SSInClk = SysClk / (CPSDVSR * (1 + SCR))
                     // with:
                     //   CPSDVSR in [2,254]
                     //   SCR in [0,255]
+                    let target_bitrate: u32 = clocks.sysclk.0 / freq.into().0;
+                    let (cpsr, scr): (u8, u8) = (1..128)
+                        .map(|x| x * 2)
+                        .filter_map(|cpsr| {
+                            let scr = (target_bitrate / cpsr) - 1;
+                            u8::try_from(scr).map(|scr| (cpsr, scr)).ok()
+                        })
+                        .next()
+                        .expect("No valid CPSDVSR/SCR for current system clock");
 
-                    loop {
-                        let scr32 = (target_bitrate / cpsr) - 1;
-                        if scr32 < 255 {
-                            scr = scr32 as u8;
-                            break;
-                        }
-                        cpsr += 2;
-                        assert!(cpsr <= 254);
-                    }
+                        spi.cpsr.write(|w| unsafe { w.cpsdvsr().bits(cpsr) });
 
-                    let cpsr = cpsr as u8;
-
-                    spi.cpsr.write(|w| unsafe {
-                        w.cpsdvsr().bits(cpsr)
-                    });
-
-                    spi.cr0.modify(|_,w| unsafe {
-                        w.spo().bit(mode.polarity == Polarity::IdleHigh)
+                        spi.cr0.modify(|_, w| unsafe { w
+                            .spo().bit(mode.polarity == Polarity::IdleHigh)
                             .sph().bit(mode.phase == Phase::CaptureOnSecondTransition)
                             // FIXME: How to use FRFR::MOTO and DSS:: ?
                             .frf().bits(0)
@@ -156,24 +153,21 @@ macro_rules! hal {
 
                 fn read(&mut self) -> nb::Result<u8, Error> {
                     // Receive FIFO Not Empty
-                    if self.spi.sr.read().rne().bit_is_clear() {
-                        Err(nb::Error::WouldBlock)
+                    if self.spi.sr.read().rne().bit_is_set() {
+                        Ok(self.spi.dr.read().data().bits())
                     } else {
-                        let r = self.spi.dr.read().data().bits() as u8;
-                        Ok(r)
+                        Err(nb::Error::WouldBlock)
                     }
                 }
 
                 fn send(&mut self, byte: u8) -> nb::Result<(), Error> {
                     // Transmit FIFO Not Full
-                    if self.spi.sr.read().tnf().bit_is_clear() {
-                        Err(nb::Error::WouldBlock)
-                    } else {
-                        self.spi.dr.write(|w| unsafe {
-                            w.data().bits(byte.into())
-                        });
+                    if self.spi.sr.read().tnf().bit_is_set() {
+                        self.spi.dr.write(|w| unsafe { w.data().bits(byte.into()) });
                         busy_wait!(self.spi, bsy, bit_is_clear);
                         Ok(())
+                    } else {
+                        Err(nb::Error::WouldBlock)
                     }
                 }
             }

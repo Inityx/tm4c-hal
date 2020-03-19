@@ -11,6 +11,7 @@ use cortex_m::asm::nop;
 /// Sets/Clears a bit at the given address atomically, using the bit-banding
 /// feature. We take a const pointer and mutate it, but that's because the
 /// svd2rust crate will only give us const pointers.
+#[allow(clippy::missing_safety_doc)]
 pub unsafe fn change_bit<T>(address: *const T, bit: u8, value: bool) {
     let address = address as u32;
     let bit_word = ref_to_bitband(address, bit);
@@ -20,6 +21,7 @@ pub unsafe fn change_bit<T>(address: *const T, bit: u8, value: bool) {
 /// Sets and then Clears a bit at the given address atomically, using the bit-
 /// banding feature. We take a const pointer and mutate it, but that's because
 /// the svd2rust crate will only give us const pointers.
+#[allow(clippy::missing_safety_doc)]
 pub unsafe fn toggle_bit<T>(address: *const T, bit: u8) {
     let address = address as u32;
     let bit_word = ref_to_bitband(address, bit);
